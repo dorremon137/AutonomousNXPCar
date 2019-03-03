@@ -1,0 +1,375 @@
+#include "MK64F12.h"										// Device header
+#include "pwm.h"
+#include "uart.h"
+#include "camera_FTM.h"
+#include "stdio.h"
+#include "isrInit.h"
+#include "math.h"
+void initialize(void);
+void drive(int center_left_edge_index, int center_right_edge_index);
+void drivev2();
+float PID(float Vdes);
+int wait = 0;
+int scan = 1;
+int ready = 2;
+int run = 3;
+int stop = 4;
+int count = 0;
+int status = 0;
+int centerLeft = 0;
+int centerRight = 0;
+int *centerPos;
+static float error_n1 = 0.0;
+static float error_n2=0.0;
+float error;
+float kp = 0.9;
+float ki = 0.0;
+float kd = 0.0;
+float left = 6.25;
+float right = 9.50;
+float stright = 7.85;
+int speed = 90;
+int center_left_edge_index = 26; //centerLeft; //32
+int center_right_edge_index = 101; //centerRight; //97
+int new_left_edge_index;
+int new_right_edge_index;
+int right_edge_difference;
+int left_edge_difference;
+int center_range;
+int new_center_difference;
+double duty_difference;
+double duty;
+double oldduty = 0.0;
+int *currentPos;
+double mid;
+char str[100];
+float servo;
+float oldServo = 0.0;
+float middle_center = 63.5;
+float middlearray[10] = {65.5,65.5,65.5,65.5,65.5,65.5,65.5,65.5,65.5,65.5};
+int i;
+int checker = 0;
+double speedact = 0.0;
+int turn = 0;
+int alternate = 0;
+int turnleft = 0;
+int turnright = 0;
+double wheel = 0.0;
+int main(){
+	//initalize all components
+	initialize(); 
+    SetDutyCycle(0,10000,0);
+    SetDutyCycle(0,10000,1);
+	SetServoDutyCycle(stright);
+	//wait for sw2 is pressed to begin the program
+	status = wait;
+	while(((GPIOC_PDIR&(1 << 6)) != 0)){};
+	
+	
+	status = run; 	 
+	for(;;){
+		drivev2();
+	}
+}
+
+void drivev2(){
+    //scan the current position
+    currentPos = findEdge();
+	float current_center = (currentPos[1]+currentPos[0])/2.0;
+
+
+    if (current_center > middle_center){
+		//turn right
+		turn = 1;
+		turnright = 1;
+		servo = stright+(0.9)*stright*(current_center-middle_center)/middle_center;
+		//servo = stright+(0.15)*stright*(2*current_center-middle_center)/middle_center;
+		//error = current_center - middle_center;
+		//servo = stright  + kp*(error-error_n1)+ki*((error-error_n1)/2.0)+kd*(error-(2.0*error_n1+error_n2));
+		if (servo > right){
+			servo = right;
+		}
+	} else if (current_center<middle_center){
+		//turn left
+		turn = 1;
+		turnleft = 1;
+		servo = stright-(0.80)*stright*((middle_center-current_center)/middle_center);
+
+		if (servo < left){
+			servo = left;
+		}
+	}
+
+	SetServoDutyCycle(servo);
+	if (servo < 7.05 || servo > 8.625) {
+    //handle tight turns
+		speedact = speed*(0.55);
+		alternate = !alternate;
+		if (turnleft){
+			SetDutyCycle(30,10000,1);
+			SetDutyCycle(speedact+30,10000,0);
+		} else if (turnright) {
+			SetDutyCycle(speedact+30,10000,1);
+			SetDutyCycle(30,10000,0);
+		}
+		turnleft = 0;
+		turnright = 0;
+		
+	} else if (servo <7.4575 || servo > 8.24) {
+    //handle soft turns
+		speedact = speed*(0.75 );
+		SetDutyCycle(speedact,10000,0);
+		SetDutyCycle(speedact,10000,1);
+	} else {
+        //go stright
+		SetDutyCycle(speed,10000,0);
+//			SetDutyCycle(speed,10000,1);
+	}
+
+  oldServo = servo;
+  error_n2 = error_n1;
+  error_n1 = error;
+	//sprintf(str,"current Speed: %f\n\r",speedact);
+	//uart_put(str);
+	
+}
+
+//void drive(int center_left_edge_index, int center_right_edge_index){
+//	currentPos = findEdge();
+//		
+//	//sprintf(str,"Left Edge:%i Right Edge:%i\n\r", currentPos[0],currentPos[1]);
+//	//uart_put(str);
+//	center_range = center_right_edge_index - center_left_edge_index;
+//	//currentPos = findEdge();
+//	new_left_edge_index = currentPos[0];
+//	new_right_edge_index = currentPos[1];
+//	new_center_difference = new_right_edge_index - new_left_edge_index;
+//	mid = new_center_difference/2.0;
+//	// Right Edge
+//	right_edge_difference = center_right_edge_index - new_right_edge_index;
+//	// Left Edge
+//	left_edge_difference = new_left_edge_index - center_left_edge_index;
+//	if (oldduty == 0.0){
+//		oldduty = stright;
+//	}
+//	// new duty
+//	duty_difference = 1-((double)new_center_difference)/((double)center_range);
+//	error = duty_difference;
+//	// Right Edge: If Old - New >= 5, turn left
+//	if (right_edge_difference >= 3) {
+//		// turn left
+//		//duty = stright - (stright*duty_difference);
+//		duty = stright - stright*(kp*(error-error_n1)+ki*(error-error_n1)/2.0+kd*(error-2.0*error_n1+error_n2));
+//		//sprintf(str,"duty: %f\r\nold duty: %f\f\rerror: %f\r\nerror_n1= %f\r\nerror_n2: %f\r\n\r\n",duty,oldduty,error,error_n1,error_n2);
+//		//uart_put(str);
+//		//duty = stright - kp*(64 + mid);
+//		if (duty < left){
+//			duty = left;
+//			SetServoDutyCycle(duty);
+//			//lower right motor
+//			SetDutyCycle((speed-5)*(3.0/5.0),10000,1);
+//			SetDutyCycle((speed+5)*(3.0/5.0),10000,0);
+//					
+//		} else {
+//			SetServoDutyCycle(duty);
+//			SetDutyCycle((speed-5),10000,1);
+//			SetDutyCycle((speed+5),10000,0);
+//		}	
+//	}
+//	
+//	// Left Edge: If New - Old >=5, turn right
+//	if (left_edge_difference >= 3) {
+//		// turn right
+//		//duty = stright + (stright*duty_difference);
+//		duty = stright + stright*(kp*(error-error_n1)+ki*(error-error_n1)/2.0+kd*(error-2.0*error_n1+error_n2));
+//		//sprintf(str,"duty: %f\r\nold duty: %f\f\rerror: %f\r\nerror_n1= %f\r\nerror_n2: %f\r\n\r\n",duty,oldduty,error,error_n1,error_n2);
+//		//uart_put(str);
+//		//duty = stright + kp*(64 - mid);
+//		if (duty > right){
+//			duty = right;
+//			SetServoDutyCycle(duty);
+//			//lower right motor
+//			SetDutyCycle(speed*(3.0/5.0),10000,1);
+//			SetDutyCycle(speed*(3.0/5.0),10000,0);
+//		} else {
+//			SetServoDutyCycle(duty);
+//			SetDutyCycle(speed,10000,1);
+//			SetDutyCycle(speed,10000,0);
+//		}
+//	}
+//	// Else, Straight
+//	if ((right_edge_difference < 3) && (left_edge_difference < 3)) {
+//		SetServoDutyCycle(stright);
+//		SetDutyCycle(speed,10000,1);
+//		SetDutyCycle(speed+5,10000,0);
+//	}
+//	if (status == stop) {
+//		SetDutyCycle(0,10000,1);
+//		SetDutyCycle(0,10000,0);
+//		SetServoDutyCycle(stright);
+//	}
+//	oldduty = duty;
+//	error_n2 = error_n1;
+//	error_n1 = error;
+	
+	
+//	else {
+//		SetServoDutyCycle(stright);
+//		SetDutyCycle(speed,10000,1);
+//		SetDutyCycle(speed+5,10000,0);
+//	}
+
+
+//float PID(float servoDes){
+//  servoAct = servo_n1;
+//  error = ServoDes - ServoAct;
+//	servo = servo_n1+kp*(error-error_n1)+ki*((error-error_n1)/2.0)+kd*(error-(2.0*error_n1+error_n2));
+//	servo_n1 = speed;
+//	error_n2 = error_n1;
+//	error_n1 = error;
+//	return servo;
+// }
+
+ 
+void initialize(){
+	
+	//initialize the UART
+	uart_init();
+	
+	//initialize the DC motors and Servo motor
+	InitPWM();
+	
+	//initialize the camera
+	init_camera();
+	
+	//initialize LED
+	initISR();
+}
+
+
+	// Disable Write Protection
+	FTM2_MODE |= FTM_MODE_WPDIS_MASK;
+	
+	// Set output to '1' on init
+	FTM2_OUTINIT |= FTM_OUTINIT_CH0OI_MASK;
+	
+	// Initialize the CNT to 0 before writing to MOD
+	FTM2_CNT = 0;
+	
+	// Set the Counter Initial Value to 0
+	FTM2_CNTIN = 0;
+	
+	// Set the period (~10us)
+	FTM2_MOD = 100;
+	
+	// 50% duty
+	FTM2_C0V = 50;
+	
+	// Set edge-aligned mode
+	FTM2_C0SC |= FTM_CnSC_MSB_MASK;
+	
+	// Enable High-true pulses
+	// ELSB = 1, ELSA = 0
+  FTM2_C0SC |= FTM_CnSC_ELSB_MASK;
+  FTM2_C0SC &= ~FTM_CnSC_ELSA_MASK;
+	
+	// Enable hardware trigger from FTM2
+	FTM2_EXTTRIG |= FTM_EXTTRIG_INITTRIGEN_MASK;
+	
+	// Don't enable interrupts yet (disable)
+	FTM2_SC &= ~(FTM_SC_TOIE_MASK);
+	
+	// No prescalar, system clock
+	FTM2_SC = FTM_SC_PS(0) | FTM_SC_CLKS(1);
+	
+	// Set up interrupt
+	NVIC_EnableIRQ(FTM2_IRQn);
+	
+	return;
+}
+
+/* Initialization of PIT timer to control 
+* 		integration period
+*/
+void init_PIT(void){
+	// Setup periodic interrupt timer (PIT)
+	SIM_SCGC6 |= SIM_SCGC6_PIT_MASK;
+    
+	// Enable clock for timers
+  PIT_MCR &= ~(PIT_MCR_MDIS_MASK);
+	
+	// Enable timers to continue in debug mode
+	PIT_MCR = PIT_MCR_FRZ_MASK; // In case you need to debug
+	
+	// PIT clock frequency is the system clock
+	// Load the value that the timer will count down from
+	PIT_LDVAL0 = (uint32_t) (INTEGRATION_TIME * DEFAULT_SYSTEM_CLOCK);
+	
+	// Enable timer interrupts
+	PIT_TCTRL0 |= PIT_TCTRL_TIE_MASK;
+	
+	// Enable the timer
+	PIT_TCTRL0 |= PIT_TCTRL_TEN_MASK;
+
+	// Clear interrupt flag
+	PIT_TFLG0 |= PIT_TFLG_TIF_MASK;
+
+	// Enable PIT interrupt in the interrupt controller
+	NVIC_EnableIRQ(PIT0_IRQn);
+	return;
+}
+
+
+/* Set up pins for GPIO
+* 	PTB9 		- camera clk
+*		PTB23		- camera SI
+*		PTB22		- red LED
+*/
+void init_GPIO(void){
+	// Enable LED and GPIO so we can see results
+    SIM_SCGC5 |= SIM_SCGC5_PORTB_MASK; // Clock
+    PORTB_PCR22 |= PORT_PCR_MUX(1);    // GPIO
+    GPIOB_PDDR |= (1 << 22);           // output mode
+    GPIOB_PDOR |= (1 << 22);           // turn off
+    PORTB_PCR9 |= PORT_PCR_MUX(1) | PORT_PCR_DSE_MASK; //PTB9
+    GPIOB_PDDR |= (1 << 9);            // output mode
+    GPIOB_PDOR |= (1 << 9);            // turn off
+    PORTB_PCR23 |= PORT_PCR_MUX(1) | PORT_PCR_DSE_MASK; //PTB23
+    GPIOB_PDDR |= (1 << 23);           // output mode
+    GPIOB_PDOR |= (1 << 23);           // turn off
+	return;
+}
+
+/* Set up ADC for capturing camera data */
+void init_ADC0(void) {
+    unsigned int calib;
+    // Turn on ADC0
+    SIM_SCGC6 |= SIM_SCGC6_ADC0_MASK;
+	
+	// Single ended 16 bit conversion, no clock divider
+	ADC0_CFG1 |= ADC_CFG1_MODE_MASK | ADC_CFG1_ADIV(0);
+    
+  // Do ADC Calibration for Singled Ended ADC. Do not touch.
+  ADC0_SC3 = ADC_SC3_CAL_MASK;
+    while ( (ADC0_SC3 & ADC_SC3_CAL_MASK) != 0 );
+    calib = ADC0_CLP0; calib += ADC0_CLP1; calib += ADC0_CLP2;
+    calib += ADC0_CLP3; calib += ADC0_CLP4; calib += ADC0_CLPS;
+    calib = calib >> 1; calib |= 0x8000;
+    ADC0_PG = calib;
+    
+    // Select hardware trigger.
+    ADC0_SC2 |= ADC_SC2_ADTRG_MASK;
+    
+    // Set to single ended mode	
+	  ADC0_SC1A = (0x40);
+	  //ADC0_SC1A &= ~ADC_SC1_DIFF_MASK;
+    
+	// Set up FTM2 trigger on ADC0
+	SIM_SOPT7 |= SIM_SOPT7_ADC0TRGSEL(0xA);      // FTM2 select
+	SIM_SOPT7 |= SIM_SOPT7_ADC0ALTTRGEN_MASK;    // Alternative trigger en.
+	SIM_SOPT7 &= ~(SIM_SOPT7_ADC0PRETRGSEL_MASK);// Pretrigger A
+	
+	// Enable NVIC interrupt
+  NVIC_EnableIRQ(ADC0_IRQn);
+}
+
